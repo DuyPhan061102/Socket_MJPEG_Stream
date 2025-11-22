@@ -1,5 +1,5 @@
 from tkinter import *
-import tkinter.messagebox
+import tkinter.messagebox as tkMessageBox
 from PIL import Image, ImageTk
 import socket, threading, sys, traceback, os
 
@@ -58,7 +58,7 @@ class Client:
 		# Create Teardown button
 		self.teardown = Button(self.master, width=20, padx=3, pady=3)
 		self.teardown["text"] = "Teardown"
-		self.teardown["command"] =  self.exitClient
+		self.teardown["command"] = self.exitClient
 		self.teardown.grid(row=1, column=3, padx=2, pady=2)
 		
 		# Create a label to display the movie
@@ -74,7 +74,9 @@ class Client:
 		"""Teardown button handler."""
 		self.sendRtspRequest(self.TEARDOWN)		
 		self.master.destroy() # Close the gui window
-		os.remove(CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT) # Delete the cache image from video
+		cache_file = CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT
+		if os.path.exists(cache_file):
+			os.remove(cache_file)
 
 	def pauseMovie(self):
 		"""Pause button handler."""
@@ -85,16 +87,17 @@ class Client:
 		"""Play button handler."""
 		if self.state == self.READY:
 			# Create a new thread to listen for RTP packets
-			threading.Thread(target=self.listenRtp).start()
+			threading.Thread(target=self.recvRtp).start()
 			self.playEvent = threading.Event()
 			self.playEvent.clear()
 			self.sendRtspRequest(self.PLAY)
 	
-	def listenRtp(self):		
-		"""Listen for RTP packets."""
+	def recvRtp(self):
+		"""Receive RTP packets from server."""
 		while True:
 			try:
-				data = self.rtpSocket.recv(20480)
+				# Receive UDP data
+				data = self.rtpSocket.recv(20480)   
 				if data:
 					rtpPacket = RtpPacket()
 					rtpPacket.decode(data)
@@ -102,16 +105,15 @@ class Client:
 					currFrameNbr = rtpPacket.seqNum()
 					print("Current Seq Num: " + str(currFrameNbr))
 										
-					if currFrameNbr > self.frameNbr: # Discard the late packet
+					if currFrameNbr > self.frameNbr: # Discard late packets
 						self.frameNbr = currFrameNbr
 						self.updateMovie(self.writeFrame(rtpPacket.getPayload()))
 			except:
-				# Stop listening upon requesting PAUSE or TEARDOWN
+				# Stop listening if requested or socket is closed
 				if self.playEvent.isSet(): 
 					break
 				
-				# Upon receiving ACK for TEARDOWN request,
-				# close the RTP socket
+				# Upon teardown, socket might be closed or error occurs
 				if self.teardownAcked == 1:
 					self.rtpSocket.shutdown(socket.SHUT_RDWR)
 					self.rtpSocket.close()
@@ -123,7 +125,6 @@ class Client:
 		file = open(cachename, "wb")
 		file.write(data)
 		file.close()
-		
 		return cachename
 	
 	def updateMovie(self, imageFile):
@@ -150,51 +151,36 @@ class Client:
 		if requestCode == self.SETUP and self.state == self.INIT:
 			threading.Thread(target=self.recvRtspReply).start()
 			# Update RTSP sequence number.
-			# ...
+			self.rtspSeq += 1
 			
 			# Write the RTSP request to be sent.
-			# request = ...
+			request = 'SETUP ' + self.fileName + ' RTSP/1.0\nCSeq: ' + str(self.rtspSeq) + '\nTransport: RTP/UDP; client_port= ' + str(self.rtpPort)
 			
 			# Keep track of the sent request.
-			# self.requestSent = ...
-		
+			self.requestSent = self.SETUP
+			
 		# Play request
 		elif requestCode == self.PLAY and self.state == self.READY:
-			# Update RTSP sequence number.
-			# ...
+			self.rtspSeq += 1
+			request = 'PLAY ' + self.fileName + ' RTSP/1.0\nCSeq: ' + str(self.rtspSeq) + '\nSession: ' + str(self.sessionId)
+			self.requestSent = self.PLAY
 			
-			# Write the RTSP request to be sent.
-			# request = ...
-			
-			# Keep track of the sent request.
-			# self.requestSent = ...
-		
 		# Pause request
 		elif requestCode == self.PAUSE and self.state == self.PLAYING:
-			# Update RTSP sequence number.
-			# ...
-			
-			# Write the RTSP request to be sent.
-			# request = ...
-			
-			# Keep track of the sent request.
-			# self.requestSent = ...
+			self.rtspSeq += 1
+			request = 'PAUSE ' + self.fileName + ' RTSP/1.0\nCSeq: ' + str(self.rtspSeq) + '\nSession: ' + str(self.sessionId)
+			self.requestSent = self.PAUSE
 			
 		# Teardown request
 		elif requestCode == self.TEARDOWN and not self.state == self.INIT:
-			# Update RTSP sequence number.
-			# ...
-			
-			# Write the RTSP request to be sent.
-			# request = ...
-			
-			# Keep track of the sent request.
-			# self.requestSent = ...
+			self.rtspSeq += 1
+			request = 'TEARDOWN ' + self.fileName + ' RTSP/1.0\nCSeq: ' + str(self.rtspSeq) + '\nSession: ' + str(self.sessionId)
+			self.requestSent = self.TEARDOWN
 		else:
 			return
 		
 		# Send the RTSP request using rtspSocket.
-		# ...
+		self.rtspSocket.send(request.encode())
 		
 		print('\nData sent:\n' + request)
 	
@@ -204,7 +190,7 @@ class Client:
 			reply = self.rtspSocket.recv(1024)
 			
 			if reply: 
-				self.parseRtspReply(reply.decode("utf-8"))
+				self.processRtspReply(reply.decode("utf-8"))
 			
 			# Close the RTSP socket upon requesting Teardown
 			if self.requestSent == self.TEARDOWN:
@@ -212,15 +198,15 @@ class Client:
 				self.rtspSocket.close()
 				break
 	
-	def parseRtspReply(self, data):
+	def processRtspReply(self, data):
 		"""Parse the RTSP reply from the server."""
 		lines = data.split('\n')
-		seqNum = int(lines[1].split(' ')[1])
+		seq = lines[1].split(' ')[1]
 		
-		# Process only if the server reply's sequence number is the same as the request's
-		if seqNum == self.rtspSeq:
+		# Process only if the RTSP sequence number is same
+		if int(seq) == self.rtspSeq:
 			session = int(lines[2].split(' ')[1])
-			# New RTSP session ID
+			# New Session ID
 			if self.sessionId == 0:
 				self.sessionId = session
 			
@@ -232,19 +218,19 @@ class Client:
 						# TO COMPLETE
 						#-------------
 						# Update RTSP state.
-						# self.state = ...
+						self.state = self.READY
 						
 						# Open RTP port.
 						self.openRtpPort() 
 					elif self.requestSent == self.PLAY:
-						# self.state = ...
+						self.state = self.PLAYING
 					elif self.requestSent == self.PAUSE:
-						# self.state = ...
+						self.state = self.READY
 						
 						# The play thread exits. A new thread is created on resume.
 						self.playEvent.set()
 					elif self.requestSent == self.TEARDOWN:
-						# self.state = ...
+						self.state = self.INIT
 						
 						# Flag the teardownAcked to close the socket.
 						self.teardownAcked = 1 
@@ -255,14 +241,15 @@ class Client:
 		# TO COMPLETE
 		#-------------
 		# Create a new datagram socket to receive RTP packets from the server
-		# self.rtpSocket = ...
+		self.rtpSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 		
 		# Set the timeout value of the socket to 0.5sec
-		# ...
+		self.rtpSocket.settimeout(0.5)
 		
 		try:
 			# Bind the socket to the address using the RTP port given by the client user
-			# ...
+			self.state = self.READY
+			self.rtpSocket.bind(('', self.rtpPort))
 		except:
 			tkMessageBox.showwarning('Unable to Bind', 'Unable to bind PORT=%d' %self.rtpPort)
 

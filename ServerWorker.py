@@ -77,13 +77,13 @@ class ServerWorker:
 				self.state = self.PLAYING
 				
 				# Create a new socket for RTP/UDP
-				self.clientInfo["rtpSocket"] = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+				self.clientInfo['rtpSocket'] = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 				
 				self.replyRtsp(self.OK_200, seq[1])
 				
 				# Create a new thread and start sending RTP packets
 				self.clientInfo['event'] = threading.Event()
-				self.clientInfo['worker']= threading.Thread(target=self.sendRtp) 
+				self.clientInfo['worker'] = threading.Thread(target=self.sendRtp) 
 				self.clientInfo['worker'].start()
 		
 		# Process PAUSE request
@@ -93,7 +93,7 @@ class ServerWorker:
 				self.state = self.READY
 				
 				self.clientInfo['event'].set()
-			
+				
 				self.replyRtsp(self.OK_200, seq[1])
 		
 		# Process TEARDOWN request
