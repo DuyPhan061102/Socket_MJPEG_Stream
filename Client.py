@@ -34,6 +34,10 @@ class Client:
 		self.teardownAcked = 0
 		self.connectToServer()
 		self.frameNbr = 0
+		self.buffer = []
+		self.BUFFER_SIZE = 20  
+		self.playingFromBuffer = False
+
 		
 	def createWidgets(self):
 		"""Build GUI."""
@@ -105,9 +109,10 @@ class Client:
 					currFrameNbr = rtpPacket.seqNum()
 					print("Current Seq Num: " + str(currFrameNbr))
 										
-					if currFrameNbr > self.frameNbr: # Discard late packets
+				if currFrameNbr > self.frameNbr: # Discard late packets
 						self.frameNbr = currFrameNbr
-						self.updateMovie(self.writeFrame(rtpPacket.getPayload()))
+						self.buffer.append(rtpPacket.getPayload())
+						print(f"Buffered frames: {len(self.buffer)}")
 			except:
 				# Stop listening if requested or socket is closed
 				if self.playEvent.isSet(): 
@@ -118,7 +123,21 @@ class Client:
 					self.rtpSocket.shutdown(socket.SHUT_RDWR)
 					self.rtpSocket.close()
 					break
-					
+	def playFromBuffer(self):
+		import time
+		while len(self.buffer) < self.BUFFER_SIZE and self.state == self.PLAYING:
+			time.sleep(0.01)
+
+		print(f"Buffer ready, starting playback with {len(self.buffer)} frames")
+
+		while self.state == self.PLAYING:
+			if len(self.buffer) > 0:
+				frame = self.buffer.pop(0)
+				imageFile = self.writeFrame(frame)
+				self.updateMovie(imageFile)
+				time.sleep(0.05)  # ~20 FPS
+			else:
+				time.sleep(0.01)				
 	def writeFrame(self, data):
 		"""Write the received frame to a temp image file. Return the image file."""
 		cachename = CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT
@@ -150,6 +169,7 @@ class Client:
 		# Setup request
 		if requestCode == self.SETUP and self.state == self.INIT:
 			threading.Thread(target=self.recvRtspReply).start()
+			threading.Thread(target=self.playFromBuffer).start()
 			# Update RTSP sequence number.
 			self.rtspSeq += 1
 			
@@ -260,3 +280,5 @@ class Client:
 			self.exitClient()
 		else: # When the user presses cancel, resume playing.
 			self.playMovie()
+
+	
