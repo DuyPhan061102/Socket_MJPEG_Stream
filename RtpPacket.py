@@ -75,3 +75,7 @@ class RtpPacket:
 	def getPacket(self):
 		"""Return RTP packet."""
 		return self.header + self.payload
+	def getMarker(self):
+		"""Return marker (M) bit."""
+		marker = (self.header[1] >> 7) & 1
+		return int(marker)

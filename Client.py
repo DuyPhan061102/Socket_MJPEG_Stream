@@ -2,6 +2,7 @@ from tkinter import *
 import tkinter.messagebox as tkMessageBox
 from PIL import Image, ImageTk
 import socket, threading, sys, traceback, os
+import queue
 
 from RtpPacket import RtpPacket
 
@@ -34,7 +35,12 @@ class Client:
 		self.teardownAcked = 0
 		self.connectToServer()
 		self.frameNbr = 0
-		
+
+		# Client-Side Caching
+		self.frameBuffer = queue.Queue()
+		self.BUFFER_THRESHOLD = 20
+		self.is_buffering = True
+		#===========================================================
 	def createWidgets(self):
 		"""Build GUI."""
 		# Create Setup button
@@ -91,34 +97,39 @@ class Client:
 			self.playEvent = threading.Event()
 			self.playEvent.clear()
 			self.sendRtspRequest(self.PLAY)
+			self.is_buffering = True 
+			self.consumeBuffer()
 	
 	def recvRtp(self):
-		"""Receive RTP packets from server."""
+		current_buffer = b"" # Buffer tạm
 		while True:
 			try:
-				# Receive UDP data
-				data = self.rtpSocket.recv(20480)   
+				data = self.rtpSocket.recv(20480)
 				if data:
+					print("Received RTP packet")  # Log nhận gói RTP
 					rtpPacket = RtpPacket()
 					rtpPacket.decode(data)
-					
-					currFrameNbr = rtpPacket.seqNum()
-					print("Current Seq Num: " + str(currFrameNbr))
-										
-					if currFrameNbr > self.frameNbr: # Discard late packets
-						self.frameNbr = currFrameNbr
-						self.updateMovie(self.writeFrame(rtpPacket.getPayload()))
-			except:
-				# Stop listening if requested or socket is closed
-				if self.playEvent.isSet(): 
-					break
-				
-				# Upon teardown, socket might be closed or error occurs
+					print(f"Decoded RTP packet: SeqNum={rtpPacket.seqNum()}, Marker={rtpPacket.getMarker()}")  # Log thông tin gói RTP
+
+					# Gom mảnh
+					current_buffer += rtpPacket.getPayload()
+
+					# Chỉ hiển thị khi gặp Marker = 1 (Hết frame)
+					if rtpPacket.getMarker() == 1:
+						if rtpPacket.seqNum() > self.frameNbr:
+							self.frameNbr = rtpPacket.seqNum()
+							self.frameBuffer.put(current_buffer) # Đẩy vào hàng đợi hiển thị
+							print(f"Frame added to buffer. Buffer size: {self.frameBuffer.qsize()}")  # Log trạng thái buffer
+						current_buffer = b"" # Reset
+			except Exception as e:
+				print(f"Error in recvRtp: {e}")  # Log lỗi
+				if self.playEvent.isSet(): break
 				if self.teardownAcked == 1:
 					self.rtpSocket.shutdown(socket.SHUT_RDWR)
 					self.rtpSocket.close()
 					break
-					
+
+
 	def writeFrame(self, data):
 		"""Write the received frame to a temp image file. Return the image file."""
 		cachename = CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT
@@ -154,27 +165,26 @@ class Client:
 			self.rtspSeq += 1
 			
 			# Write the RTSP request to be sent.
-			request = 'SETUP ' + self.fileName + ' RTSP/1.0\nCSeq: ' + str(self.rtspSeq) + '\nTransport: RTP/UDP; client_port= ' + str(self.rtpPort)
-			
+			request = 'SETUP ' + self.fileName + ' RTSP/1.0\nCSeq: ' + str(self.rtspSeq) + '\nTransport: RTP/UDP; client_port= ' + str(self.rtpPort) + '\n'			
 			# Keep track of the sent request.
 			self.requestSent = self.SETUP
 			
 		# Play request
 		elif requestCode == self.PLAY and self.state == self.READY:
 			self.rtspSeq += 1
-			request = 'PLAY ' + self.fileName + ' RTSP/1.0\nCSeq: ' + str(self.rtspSeq) + '\nSession: ' + str(self.sessionId)
+			request = 'PLAY ' + self.fileName + ' RTSP/1.0\nCSeq: ' + str(self.rtspSeq) + '\nSession: ' + str(self.sessionId) + '\n'
 			self.requestSent = self.PLAY
 			
 		# Pause request
 		elif requestCode == self.PAUSE and self.state == self.PLAYING:
 			self.rtspSeq += 1
-			request = 'PAUSE ' + self.fileName + ' RTSP/1.0\nCSeq: ' + str(self.rtspSeq) + '\nSession: ' + str(self.sessionId)
+			request = 'PAUSE ' + self.fileName + ' RTSP/1.0\nCSeq: ' + str(self.rtspSeq) + '\nSession: ' + str(self.sessionId) + '\n'
 			self.requestSent = self.PAUSE
 			
 		# Teardown request
 		elif requestCode == self.TEARDOWN and not self.state == self.INIT:
 			self.rtspSeq += 1
-			request = 'TEARDOWN ' + self.fileName + ' RTSP/1.0\nCSeq: ' + str(self.rtspSeq) + '\nSession: ' + str(self.sessionId)
+			request = 'TEARDOWN ' + self.fileName + ' RTSP/1.0\nCSeq: ' + str(self.rtspSeq) + '\nSession: ' + str(self.sessionId) + '\n'
 			self.requestSent = self.TEARDOWN
 		else:
 			return
@@ -260,3 +270,39 @@ class Client:
 			self.exitClient()
 		else: # When the user presses cancel, resume playing.
 			self.playMovie()
+			
+	def consumeBuffer(self):
+		"""Lấy frame từ buffer và hiển thị lên giao diện"""
+		try:
+			# Chỉ chạy khi trạng thái là PLAYING hoặc READY (để xử lý buffering ban đầu)
+			if self.state == self.PLAYING or (self.state == self.READY and self.is_buffering):
+				# 1. Logic Pre-buffering: Nếu đang cần buffer thì kiểm tra xem đủ chưa
+				if self.is_buffering:
+					print(f"Buffering... Current buffer size: {self.frameBuffer.qsize()}")  # Log trạng thái buffering
+					if self.frameBuffer.qsize() < self.BUFFER_THRESHOLD:
+						self.master.after(20, self.consumeBuffer)
+						return
+					else:
+						print("Buffering complete. Starting playback.")
+						self.is_buffering = False
+				# 2. Logic Playback: Lấy frame ra chiếu
+				if not self.frameBuffer.empty():
+					frameData = self.frameBuffer.get()
+					print("Displaying frame...")  # Log hiển thị frame
+
+					# Ghi ra file và cập nhật lên màn hình
+					self.updateMovie(self.writeFrame(frameData))
+
+					# Tốc độ chiếu: 50ms (tương đương 20 fps)
+					# Nếu buffer đầy quá (trên 50 frame), chiếu nhanh hơn (40ms) để đuổi kịp
+					delay = 40 if self.frameBuffer.qsize() > 50 else 50
+					self.master.after(delay, self.consumeBuffer)
+				else:
+					# Nếu hàng đợi rỗng -> Quay lại trạng thái Buffering
+					print("Buffer empty! Re-buffering...")
+					self.is_buffering = True
+					self.master.after(20, self.consumeBuffer)
+		except queue.Empty:
+			print("Error: Frame buffer is empty unexpectedly.")
+		except Exception as e:
+			print(f"Unexpected error in consumeBuffer: {e}")

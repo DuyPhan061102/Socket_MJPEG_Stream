@@ -122,28 +122,48 @@ class ServerWorker:
 				try:
 					address = self.clientInfo['rtspSocket'][1][0]
 					port = int(self.clientInfo['rtpPort'])
-					self.clientInfo['rtpSocket'].sendto(self.makeRtp(data, frameNumber),(address,port))
-				except:
-					print("Connection Error")
-					#print('-'*60)
-					#traceback.print_exc(file=sys.stdout)
-					#print('-'*60)
 
-	def makeRtp(self, payload, frameNbr):
+					# --- [HD Video Streaming: Fragmentation Logic] ---
+					MAX_SIZE = 1400  # Maximum size of a packet
+					size = len(data)
+					start = 0
+
+					while start < size:
+						# Calculate the end position of the current fragment
+						end = start + MAX_SIZE
+						if end > size:
+							end = size
+
+						# Extract the payload for the current fragment
+						payload = data[start:end]
+
+						# Determine if this is the last fragment (Marker = 1)
+						marker = 1 if end == size else 0
+
+						# Send the RTP packet with the corresponding marker
+						self.clientInfo['rtpSocket'].sendto(self.makeRtp(payload, frameNumber, marker), (address, port))
+
+						# Update the start position for the next fragment
+						start = end
+					# --- [End of Fragmentation Logic] ---
+
+				except Exception as e:
+					print(f"Connection Error: {e}")
+
+	def makeRtp(self, payload, frameNbr, marker):
 		"""RTP-packetize the video data."""
 		version = 2
 		padding = 0
 		extension = 0
 		cc = 0
-		marker = 0
-		pt = 26 # MJPEG type
+		pt = 26  # MJPEG type
 		seqnum = frameNbr
 		ssrc = 0 
-		
+
 		rtpPacket = RtpPacket()
-		
+
 		rtpPacket.encode(version, padding, extension, cc, seqnum, marker, pt, ssrc, payload)
-		
+
 		return rtpPacket.getPacket()
 		
 	def replyRtsp(self, code, seq):
