@@ -12,10 +12,6 @@ class RtpPacket:
 		"""Encode the RTP packet with header fields and payload."""
 		timestamp = int(time())
 		header = bytearray(HEADER_SIZE)
-		#--------------
-		# TO COMPLETE
-		#--------------
-		# Fill the header bytearray with RTP header fields
 		
 		# Byte 0: Version (2 bits), Padding (1 bit), Extension (1 bit), CSRC Count (4 bits)
 		header[0] = (version << 6) | (padding << 5) | (extension << 4) | cc
@@ -75,6 +71,7 @@ class RtpPacket:
 	def getPacket(self):
 		"""Return RTP packet."""
 		return self.header + self.payload
+	
 	def getMarker(self):
 		"""Return marker (M) bit."""
 		marker = (self.header[1] >> 7) & 1
