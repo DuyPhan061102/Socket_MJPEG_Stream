@@ -126,6 +126,7 @@ class Client:
 		while True:
 			try:
 				data = self.rtpSocket.recv(20480)
+				print(f"Received RTP packet (len= {len(data)})")
 				if data:
 					rtpPacket = RtpPacket()
 					rtpPacket.decode(data)
@@ -149,6 +150,9 @@ class Client:
 						if rtpPacket.seqNum() > self.frameNbr:
 							self.frameNbr = rtpPacket.seqNum()
 							self.frameBuffer.put(current_buffer)
+
+							print(f"Seq: {rtpPacket.seqNum()}, Marker = {rtpPacket.getMarker()}")
+							print("Frame added to buffer")
 						current_buffer = b""
 			except Exception as e:
 				if self.playEvent.isSet(): 
