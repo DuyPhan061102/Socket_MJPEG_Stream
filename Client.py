@@ -35,6 +35,7 @@ class Client:
 		self.connectToServer()
 		self.frameNbr = 0
 
+
 		# Client-Side Caching
 		self.frameBuffer = queue.Queue()
 		self.BUFFER_THRESHOLD = 20
@@ -51,6 +52,7 @@ class Client:
 		
 		# Setup window close handler (must be at the end)
 		self.master.protocol("WM_DELETE_WINDOW", self.handler)
+
 		
 	def createWidgets(self):
 		"""Build GUI."""
@@ -131,6 +133,7 @@ class Client:
 					rtpPacket = RtpPacket()
 					rtpPacket.decode(data)
 					
+
 					# Track statistics
 					self.stats['total_packets'] += 1
 					self.stats['total_bytes'] += len(data)
@@ -155,12 +158,14 @@ class Client:
 							print("Frame added to buffer")
 						current_buffer = b""
 			except Exception as e:
+
 				if self.playEvent.isSet(): 
 					break
 				if self.teardownAcked == 1:
 					self.rtpSocket.shutdown(socket.SHUT_RDWR)
 					self.rtpSocket.close()
 					break
+
 
 	def updateStats(self):
 		"""Update statistics display periodically"""
@@ -194,6 +199,7 @@ class Client:
 		print(f"Average Bitrate: {(self.stats['total_bytes'] * 8 / elapsed / 1000) if elapsed > 0 else 0:.2f} kbps")
 		print("="*50 + "\n")
 
+
 	def writeFrame(self, data):
 		"""Write the received frame to a temp image file."""
 		cachename = CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT
@@ -220,6 +226,7 @@ class Client:
 		"""Send RTSP request to the server."""
 		if requestCode == self.SETUP and self.state == self.INIT:
 			threading.Thread(target=self.recvRtspReply).start()
+
 			self.rtspSeq += 1
 			request = 'SETUP ' + self.fileName + ' RTSP/1.0\nCSeq: ' + str(self.rtspSeq) + '\nTransport: RTP/UDP; client_port= ' + str(self.rtpPort) + '\n'
 			self.requestSent = self.SETUP
@@ -297,6 +304,7 @@ class Client:
 		self.pauseMovie()
 		if tkMessageBox.askokcancel("Quit?", "Are you sure you want to quit?"):
 			self.exitClient()
+
 		else:
 			self.playMovie()
 			
@@ -321,3 +329,4 @@ class Client:
 					self.master.after(20, self.consumeBuffer)
 		except Exception as e:
 			print(f"Error in consumeBuffer: {e}")
+
